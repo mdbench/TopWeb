@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comic Book Reader</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        
+        body {
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        
+        h1 {
+            margin-bottom: 20px;
+            text-align: center;
+            color: #333;
+        }
+        
+        .upload-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        
+        #file-input {
+            display: none;
+        }
+        
+        .upload-btn {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        
+        .upload-btn:hover {
+            background-color: #45a049;
+        }
+        
+        .comics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .comic-card {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.2s;
+            position: relative;
+        }
+        
+        .comic-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .comic-card img {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+        }
+        
+        .comic-card h3 {
+            padding: 10px;
+            text-align: center;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .viewer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .viewer-content {
+            position: relative;
+            max-width: 90%;
+            max-height: 90%;
+        }
+        
+        .viewer-img {
+            max-width: 100%;
+            max-height: 90vh;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            background: none;
+            border: none;
+        }
+        
+        .nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            background: rgba(0,0,0,0.5);
+            border: none;
+            padding: 20px;
+            border-radius: 50%;
+        }
+        
+        .prev-btn {
+            left: 20px;
+        }
+        
+        .next-btn {
+            right: 20px;
+        }
+        
+        .magnifier {
+            position: absolute;
+            width: 200px;
+            height: 200px;
+            border: 3px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            background-repeat: no-repeat;
+            display: none;
+            z-index: 1001;
+        }
+        
+        .status {
+            text-align: center;
+            margin: 10px 0;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Comic Book Reader</h1>
+    
+    <div class="upload-container">
+        <input type="file" id="file-input" accept=".cbz,.cbr,.zip,.rar">
+        <button class="upload-btn" id="upload-btn">Upload Comic</button>
+    </div>
+    
+    <div class="status" id="status"></div>
+    
+    <div class="comics-grid" id="comics-grid">
+        <!-- Comics will be loaded here -->
+    </div>
+    
+    <div class="viewer" id="viewer">
+        <button class="close-btn" id="close-btn">×</button>
+        <div class="viewer-content">
+            <img class="viewer-img" id="viewer-img" src="">
+            <button class="nav-btn prev-btn" id="prev-btn">❮</button>
+            <button class="nav-btn next-btn" id="next-btn">❯</button>
+            <div class="magnifier" id="magnifier"></div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip-utils/0.1.0/jszip-utils.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const fileInput = document.getElementById('file-input');
+            const uploadBtn = document.getElementById('upload-btn');
+            const comicsGrid = document.getElementById('comics-grid');
+            const viewer = document.getElementById('viewer');
+            const viewerImg = document.getElementById('viewer-img');
+            const closeBtn = document.getElementById('close-btn');
+            const prevBtn = document.getElementById('prev-btn');
+            const nextBtn = document.getElementById('next-btn');
+            const magnifier = document.getElementById('magnifier');
+            const status = document.getElementById('status');
+            
+            let currentComic = null;
+            let currentPages = [];
+            let currentPageIndex = 0;
+            let hoverTimeout = null;
+            let db = null;
+            
+            // Initialize IndexedDB
+            const initDB = () => {
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open('ComicBookDB', 1);
+                    
+                    request.onerror = (event) => {
+                        console.error('Database error:', event.target.error);
+                        reject('Failed to open database');
+                    };
+                    
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        
+                        if (!db.objectStoreNames.contains('comics')) {
+                            const comicsStore = db.createObjectStore('comics', { keyPath: 'fileName' });
+                            comicsStore.createIndex('cover', 'cover', { unique: false });
+                            comicsStore.createIndex('pages', 'pages', { unique: false });
+                        }
+                    };
+                    
+                    request.onsuccess = (event) => {
+                        db = event.target.result;
+                        resolve();
+                    };
+                });
+            };
+            
+            // Load comics from IndexedDB
+            const loadComics = () => {
+                const transaction = db.transaction(['comics'], 'readonly');
+                const store = transaction.objectStore('comics');
+                const request = store.getAll();
+                
+                request.onsuccess = (event) => {
+                    comicsGrid.innerHTML = '';
+                    const comics = event.target.result;
+                    
+                    if (comics.length === 0) {
+                        status.textContent = 'No comics found. Upload one to get started!';
+                        return;
+                    }
+                    
+                    status.textContent = '';
+                    
+                    comics.forEach(comic => {
+                        const card = document.createElement('div');
+                        card.className = 'comic-card';
+                        card.dataset.fileName = comic.fileName;
+                        
+                        const img = document.createElement('img');
+                        img.src = comic.cover;
+                        img.alt = comic.fileName;
+                        
+                        const title = document.createElement('h3');
+                        title.textContent = comic.fileName;
+                        
+                        card.appendChild(img);
+                        card.appendChild(title);
+                        comicsGrid.appendChild(card);
+                        
+                        card.addEventListener('click', () => {
+                            openComic(comic.fileName);
+                        });
+                    });
+                };
+            };
+            
+            // Open comic in viewer
+            const openComic = (fileName) => {
+                const transaction = db.transaction(['comics'], 'readonly');
+                const store = transaction.objectStore('comics');
+                const request = store.get(fileName);
+                
+                request.onsuccess = (event) => {
+                    const comic = event.target.result;
+                    if (!comic) return;
+                    
+                    currentComic = comic;
+                    currentPages = comic.pages;
+                    currentPageIndex = 0;
+                    
+                    viewerImg.src = currentPages[currentPageIndex];
+                    viewer.style.display = 'flex';
+                    
+                    document.body.style.overflow = 'hidden';
+                };
+            };
+            
+            // Handle file upload
+            const handleFileUpload = (file) => {
+                status.textContent = `Processing ${file.name}...`;
+                
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const arrayBuffer = event.target.result;
+                    
+                    JSZip.loadAsync(arrayBuffer).then(zip => {
+                        const files = [];
+                        const imagePromises = [];
+                        
+                        zip.forEach((relativePath, zipEntry) => {
+                            if (!zipEntry.dir && /\.(jpg|jpeg|png|gif|webp)$/i.test(zipEntry.name)) {
+                                files.push(zipEntry);
+                            }
+                        });
+                        
+                        // Sort files naturally
+                        files.sort((a, b) => {
+                            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+                        });
+                        
+                        // Extract first page as cover
+                        if (files.length > 0) {
+                            const coverFile = files[0];
+                            imagePromises.push(
+                                coverFile.async('blob').then(blob => {
+                                    return new Promise((resolve) => {
+                                        const reader = new FileReader();
+                                        reader.onload = () => resolve(reader.result);
+                                        reader.readAsDataURL(blob);
+                                    });
+                                })
+                            );
+                        }
+                        
+                        // Extract all pages
+                        const pagesPromises = files.map(file => {
+                            return file.async('blob').then(blob => {
+                                return new Promise((resolve) => {
+                                    const reader = new FileReader();
+                                    reader.onload = () => resolve(reader.result);
+                                    reader.readAsDataURL(blob);
+                                });
+                            });
+                        });
+                        
+                        Promise.all([imagePromises[0], Promise.all(pagesPromises)]).then(results => {
+                            const [cover, pages] = results;
+                            
+                            const transaction = db.transaction(['comics'], 'readwrite');
+                            const store = transaction.objectStore('comics');
+                            
+                            const comicData = {
+                                fileName: file.name,
+                                cover: cover,
+                                pages: pages,
+                                lastRead: new Date().getTime()
+                            };
+                            
+                            const request = store.put(comicData);
+                            
+                            request.onsuccess = () => {
+                                status.textContent = `${file.name} added successfully!`;
+                                loadComics();
+                            };
+                            
+                            request.onerror = () => {
+                                status.textContent = `Error adding ${file.name}`;
+                            };
+                        });
+                    }).catch(error => {
+                        console.error('Error reading zip file:', error);
+                        status.textContent = `Error processing ${file.name}`;
+                    });
+                };
+                
+                reader.readAsArrayBuffer(file);
+            };
+            
+            // Event listeners
+            uploadBtn.addEventListener('click', () => fileInput.click());
+            
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                
+                // Check if comic already exists
+                const transaction = db.transaction(['comics'], 'readonly');
+                const store = transaction.objectStore('comics');
+                const request = store.get(file.name);
+                
+                request.onsuccess = (event) => {
+                    if (event.target.result) {
+                        status.textContent = `${file.name} already exists in your collection.`;
+                    } else {
+                        handleFileUpload(file);
+                    }
+                };
+                
+                fileInput.value = '';
+            });
+            
+            closeBtn.addEventListener('click', () => {
+                viewer.style.display = 'none';
+                document.body.style.overflow = 'auto';
+            });
+            
+            prevBtn.addEventListener('click', () => {
+                if (currentPageIndex > 0) {
+                    currentPageIndex--;
+                    viewerImg.src = currentPages[currentPageIndex];
+                }
+            });
+            
+            nextBtn.addEventListener('click', () => {
+                if (currentPageIndex < currentPages.length - 1) {
+                    currentPageIndex++;
+                    viewerImg.src = currentPages[currentPageIndex];
+                }
+            });
+            
+            // Keyboard navigation
+            document.addEventListener('keydown', (event) => {
+                if (viewer.style.display === 'flex') {
+                    if (event.key === 'ArrowLeft') {
+                        prevBtn.click();
+                    } else if (event.key === 'ArrowRight') {
+                        nextBtn.click();
+                    } else if (event.key === 'Escape') {
+                        closeBtn.click();
+                    }
+                }
+            });
+            
+            // Magnifier functionality
+            viewerImg.addEventListener('mousemove', (event) => {
+                if (hoverTimeout) clearTimeout(hoverTimeout);
+                
+                hoverTimeout = setTimeout(() => {
+                    magnifier.style.display = 'block';
+                    
+                    const imgRect = viewerImg.getBoundingClientRect();
+                    const x = event.clientX - imgRect.left;
+                    const y = event.clientY - imgRect.top;
+                    
+                    const magnifierX = x - 100;
+                    const magnifierY = y - 100;
+                    
+                    magnifier.style.left = `${magnifierX}px`;
+                    magnifier.style.top = `${magnifierY}px`;
+                    
+                    magnifier.style.backgroundImage = `url(${viewerImg.src})`;
+                    magnifier.style.backgroundSize = `${viewerImg.naturalWidth * 2}px ${viewerImg.naturalHeight * 2}px`;
+                    magnifier.style.backgroundPosition = `-${x * 2 - 100}px -${y * 2 - 100}px`;
+                }, 2000);
+            });
+            
+            viewerImg.addEventListener('mouseout', () => {
+                if (hoverTimeout) clearTimeout(hoverTimeout);
+                magnifier.style.display = 'none';
+            });
+            
+            // Initialize app
+            initDB().then(() => {
+                loadComics();
+            }).catch(error => {
+                status.textContent = 'Error initializing database. Please refresh the page.';
+                console.error(error);
+            });
+        });
+    </script>
+</body>
+</html>
